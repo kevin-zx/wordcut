@@ -32,7 +32,7 @@ func PureCorpusWithLettersAndDigitals(content string) []rune {
 						if s {
 							s = false
 							if l > 1 {
-								if tmpRs[len(tmpRs)-1] != ' ' {
+								if len(tmpRs) > 0 && tmpRs[len(tmpRs)-1] != ' ' {
 									tmpRs = append(tmpRs, ' ')
 								}
 							}
@@ -43,7 +43,7 @@ func PureCorpusWithLettersAndDigitals(content string) []rune {
 						l++
 						if !s {
 							s = true
-							if tmpRs[len(tmpRs)-1] != ' ' {
+							if len(tmpRs) > 0 && tmpRs[len(tmpRs)-1] != ' ' {
 								tmpRs = append(tmpRs, ' ')
 							}
 						}
