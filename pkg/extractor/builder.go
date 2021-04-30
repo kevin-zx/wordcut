@@ -4,28 +4,32 @@ import (
 	"log"
 	"math"
 	"sort"
-	"strings"
+	"sync"
 
 	"github.com/kevin-zx/wordcut/pkg/corpus/clear"
 )
 
 // Builder 构建分词
 type Builder struct {
-	left           []int
-	right          []int
+	rightRank      []int
 	letters        letters
-	reverseLetters letters
 	maxLen         int
-	wm             map[string]*Word
-	singleWm       map[string]*Word
+	wm             []*Word
+	singleWmn      map[rune]*singWm
 	corpusFloatLen float64
 }
 
+type singWm struct {
+	start int
+	end   int
+	count int
+	freq  float64
+}
 type letters []rune
 
 // Word 关键词信息
 type Word struct {
-	Word           []rune
+	Word           string
 	Count          int
 	Freq           float64
 	Poly           float64  // poly 凝固度 越大说明这个词越不可能是两个词
@@ -74,15 +78,17 @@ func genflex(rawNeighbour []string, wordCount float64) float64 {
 	return flex
 }
 
+var lock *sync.Mutex
+
 // NewBuilder 新建Builder
 func NewBuilder(corpus []rune, maxLen int) *Builder {
 	b := Builder{
 		letters:        corpus,
-		reverseLetters: nil,
 		maxLen:         maxLen,
 		corpusFloatLen: float64(len(corpus)),
 	}
-	b.wm = make(map[string]*Word)
+	lock = new(sync.Mutex)
+	b.wm = []*Word{}
 	return &b
 }
 
@@ -95,254 +101,329 @@ const minFlex = 1.0
 func (b *Builder) Extract() []*Word {
 	// b.genRank()
 
-	log.Printf("start calculate right direct\n")
+	// log.Printf("start calculate right direct\n")
 	log.Printf("start gen right rank\n")
 
-	b.right = rankWords(b.letters, b.maxLen)
-	b.singleWord()
+	b.rightRank = rankWords(b.letters, b.maxLen)
+	b.singleWordN()
 	log.Printf("end gen right rank\n")
 
-	b.calculateSide(true)
-	b.right = nil
-
-	log.Printf("start calculate left direct\n")
-
-	b.reverseLetters = reverseRunes(b.letters)
-	b.letters = nil
-
-	log.Printf("start gen left rank\n")
-
-	b.left = rankWords(b.reverseLetters, b.maxLen)
-
-	log.Printf("end gen left rank\n")
-
-	b.calculateSide(false)
-
-	log.Printf("start calculate score\n")
+	b.calculateSideNew()
 	return b.score()
 }
 
 func (b *Builder) score() []*Word {
-	war := []*Word{}
-	for w, wi := range b.wm {
-		delete(b.wm, w)
+	for _, wi := range b.wm {
 		wi.Poly = math.Log(wi.Poly + 1)
 		wi.Score = wi.Poly * wi.Flex * wi.Freq
-		// if wi.Score < 15 {
-		//   continue
-		// }
-		war = append(war, wi)
+
 	}
-	sort.Slice(war, func(i, j int) bool {
-		return war[i].Score > war[j].Score
+	sort.Slice(b.wm, func(i, j int) bool {
+		return b.wm[i].Score > b.wm[j].Score
 	})
-	return war
+	return b.wm
 }
 
-func (b *Builder) singleWord() {
-	b.singleWm = make(map[string]*Word)
-	tw := rune(0)
-	for _, index := range b.right {
+func (b *Builder) singleWordN() {
+	b.singleWmn = make(map[rune]*singWm)
+	letter := rune(0)
+	start := 0
+	for i, index := range b.rightRank {
 		wr := b.letters[index]
-		w := string(wr)
-		if tw == rune(0) || tw != wr {
-			tw = wr
-			b.singleWm[w] = &Word{
-				Word:  []rune{wr},
-				Count: 1,
+		if letter == 0 {
+			letter = wr
+		}
+		if letter != wr {
+			b.singleWmn[letter] = &singWm{start: start, end: i - 1, count: i - start}
+			start = i
+			letter = wr
+		}
+	}
+	for _, wi := range b.singleWmn {
+		wi.freq = float64(wi.count) / b.corpusFloatLen
+	}
+}
+
+func (b *Builder) calculateSideNew() {
+	// 单词的第一个字符
+	currLetter := rune(0)
+	// // 每个不同字符积累的
+	// var words map[string]*Word
+	// isLetter := false
+
+	blockLetter := rune(0)
+	rankStart := 0
+	rankEnd := 0
+	// c := runtime.NumCPU()
+	c := 1
+	tasks := make(chan []int, c)
+	w := sync.WaitGroup{}
+	w.Add(c)
+	for i := 0; i < c; i++ {
+		go func() {
+			for t := range tasks {
+				b.calculateBlock(t[0], t[1])
 			}
+			w.Done()
+		}()
+	}
+	// 循环排序结果
+	for i, index := range b.rightRank {
+		if i%10000 == 0 {
+			log.Printf("cut words %d/%d = %.3f\n", i, len(b.rightRank), float64(i)/b.corpusFloatLen)
+		}
+
+		currLetter = b.letters[index]
+		if blockLetter == 0 {
+			blockLetter = b.letters[index]
 			continue
 		}
 
-		b.singleWm[w].Count++
+		if blockLetter != currLetter {
+			rankEnd = i - 1
+			if blockLetter != ' ' {
+				tasks <- []int{rankStart, rankEnd}
+			}
+			rankStart = i
+			blockLetter = currLetter
+		}
 	}
-	for _, wi := range b.singleWm {
-		wi.Freq = float64(wi.Count) / b.corpusFloatLen
-	}
+	close(tasks)
+	w.Wait()
 }
 
-func (b *Builder) calculateSide(right bool) {
-	// rank 是给字符串排序
-	// right 是右方向排序
-	rank := b.right
-	if !right {
-		// left 是左方向排序
-		rank = b.left
+func (b *Builder) calculateBlock(start, end int) {
+	if end-start < 10 {
+		return
 	}
-	// 调整字符的排序方向
-	rankedLetters := b.letters
-	if !right {
-		rankedLetters = b.reverseLetters
-	}
+	first := b.letters[b.rightRank[start]]
+	isfirstLetter := clear.IsDigital(first) || clear.IsLetter(first)
 
-	// 单词的第一个字符
-	prefixLetter := rune(0)
-	// 每个不同字符积累的
-	var words map[string]*Word
-	isLetter := false
+	for l := 2; l < b.maxLen; l++ {
+		pres := []rune{}
+		suffixes := []rune{}
+		var word []rune
+		count := 0
+		isletter := false
 
-	// 循环排序结果
-	for i, index := range rank {
-		if i%100000 == 0 {
-			log.Printf("caculateside all:%d, current:%d, process: %.5f\n", len(rank), i, float64(i)/float64(len(rank)))
-		}
-		// 如果 prefixLetter 是个空就给 prefixLetter 一个开头的字符
-		if prefixLetter == rune(0) {
-			prefixLetter = rankedLetters[index]
-			words = make(map[string]*Word)
-		}
-
-		if prefixLetter != rankedLetters[index] {
-			// 如果 首字符 和 新的index 的 首字符 不同
-			if len(words) > 0 { // 如果积累的关键词 不等于0 则进行处理
-				//
-				for w, wi := range words {
-					if wi.Count < minCount {
-						delete(words, w)
-						continue
-					}
-					wi.Freq = float64(wi.Count) / b.corpusFloatLen
-					wi.generateFlex()
-				}
-				if len(words) > 0 {
-					b.ployWord(words, right)
-				}
-				if right {
-					// 右方向添加词
-					for w, wi := range words {
-						if wi.Poly < minPoly || wi.Flex <= minFlex {
-							continue
-						}
-						b.wm[w] = wi
-					}
-				} else {
-					// 左方向筛选词
-					for w, wi := range words {
-						if wi.Poly < minPoly || wi.Flex <= minFlex {
-							delete(b.wm, w)
-						}
+		for i := start; i <= end; i++ {
+			index := b.rightRank[i]
+			if index+l > len(b.letters) {
+				continue
+			}
+			cs := b.letters[index : index+l]
+			if !isfirstLetter {
+				for i, c := range cs {
+					if c == ' ' && i != len(cs)-1 {
+						isletter = true
 					}
 				}
-
-				prefixLetter = rankedLetters[index]
-				words = make(map[string]*Word)
 			} else {
-				// 如果 words 没有东西则 words 置空
-				// log.Printf("tmpWm 为空, tempW为：%s， letters[index]为：%s \n", string(tmpW), string(letters[index]))
-				prefixLetter = rune(0)
-				continue
+				isletter = true
 			}
-		}
 
-		// 看当前首个字符是不是英文字母
-		isLetter = clear.IsLetter(prefixLetter)
-		for l := 2; l <= b.maxLen; l++ {
-			// 这块逻辑就是为了判断当前长度是不是一个单词的，如果不是一个单词的结束则不计入关键词
-			if isLetter {
-				if index > 0 && clear.IsLetter(rankedLetters[index-1]) {
+			if isletter {
+				if cs[len(cs)-1] == ' ' {
 					continue
 				}
-				if index+l < int(b.corpusFloatLen) && clear.IsLetter(rankedLetters[index+l]) {
-					continue
+				// fmt.Println(string(cs))
+
+			}
+
+			if word == nil {
+				word = cs
+			}
+			if !runeEqual(word, cs) {
+				if count > 5 && len(pres) != 0 && len(suffixes) != 0 {
+					b.calculateLenBlock(word, pres, suffixes, count)
 				}
-			}
-			if index+l > int(b.corpusFloatLen) {
-				continue
-			}
-			currentLenWordrunes := rankedLetters[index : index+l]
-			if !right {
-				currentLenWordrunes = reverseRunes(currentLenWordrunes)
-			}
 
-			currentLenWord := string(currentLenWordrunes)
-			if !isLetter && strings.Contains(currentLenWord, " ") {
-				continue
+				word = cs
+				pres = []rune{}
+				suffixes = []rune{}
+				count = 1
 			}
-
-			if _, ok := words[currentLenWord]; !ok {
-				if !right {
-					// 左侧不需要建立新的word
-					if wi, ok := b.wm[currentLenWord]; ok {
-						// left 如果主词没有的话就不需要判断了 但是letter因为给单独的poly 所以单拎出来
-						if len(currentLenWordrunes) > 2 {
-							if _, ok := words[string(currentLenWordrunes[1:])]; !ok && isLetter {
-								continue
-							}
-						}
-						words[currentLenWord] = wi
-					} else {
+			if index > 0 {
+				pre := b.letters[index-1]
+				if pre == ' ' {
+					if index > 1 {
+						pre = b.letters[index-2]
+					}
+				}
+				if isletter {
+					if clear.IsLetter(pre) || clear.IsDigital(pre) {
 						continue
 					}
-				} else {
-					// 右方向直接建立word
-					words[currentLenWord] = &Word{
-						Word: currentLenWordrunes,
-						// flex:  -1,
-						Count: 0,
+				}
+				if pre != ' ' {
+					pres = append(pres, pre)
+				}
+			}
+			if index+l < len(b.letters) {
+				suf := b.letters[index+l]
+				if suf == ' ' {
+					if index+l+1 < len(b.letters) {
+						suf = b.letters[index+l+1]
 					}
 				}
-
-			}
-			// 加一下相邻字符
-			if index+l < len(rank) {
-				if right {
-					words[currentLenWord].rightNeighbour = append(words[currentLenWord].rightNeighbour, string(rankedLetters[index+l]))
-				} else {
-					words[currentLenWord].leftNeighbour = append(words[currentLenWord].leftNeighbour, string(rankedLetters[index+l]))
+				if isletter {
+					if clear.IsLetter(suf) || clear.IsDigital(suf) {
+						continue
+					}
+				}
+				if suf != ' ' {
+					suffixes = append(suffixes, suf)
 				}
 			}
-			if right {
-				words[currentLenWord].Count++
+
+			count++
+			// words = append(words, w)
+		}
+	}
+}
+
+func runeEqual(r1, r2 []rune) bool {
+	if len(r1) != len(r2) {
+		return false
+	}
+	for i := 0; i < len(r1); i++ {
+		if r1[i] != r2[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *Builder) calculateLenBlock(word, prefix, suffix []rune, count int) {
+	flex := b.blockGenFlex(word, prefix, suffix, count)
+	if flex < minFlex {
+		return
+	}
+	ploy := b.blockPloyWord(word, count)
+	if ploy < minPoly {
+		return
+	}
+	lock.Lock()
+	b.wm = append(b.wm, &Word{
+		Word:  string(word),
+		Count: count,
+		Freq:  float64(count) / b.corpusFloatLen,
+		Poly:  ploy,
+		Flex:  flex,
+		Score: 0.0,
+	})
+	lock.Unlock()
+
+}
+func (b *Builder) blockPloyWord(word []rune, wordCount int) float64 {
+	pr := b.ployOne(word[:len(word)-1], word[len(word)-1], wordCount)
+	if pr < minPoly {
+		return pr
+	}
+	return math.Min(pr, b.ployOne(word[1:], word[0], wordCount))
+}
+
+func (b *Builder) ployOne(mainWord []rune, fix rune, wordCount int) float64 {
+	fsw := b.singleWmn[fix]
+	msw := b.singleWmn[mainWord[0]]
+	mc := 0
+	if len(mainWord) == 1 {
+		mc = msw.count
+	} else {
+		mc = b.getOneWordCount(mainWord, msw.start, msw.end)
+	}
+	return (b.corpusFloatLen * float64(wordCount)) / (float64(fsw.count * mc))
+}
+func (b *Builder) getOneWordCount(word []rune, rankStart int, rankEnd int) int {
+	count := 0
+	wordL := len(word)
+
+	for {
+		if rankStart >= len(b.rightRank) {
+			break
+		}
+		letterIndex := b.rightRank[rankStart]
+		rankStart++
+		if letterIndex+wordL > len(b.letters) {
+			continue
+		}
+		cw := b.letters[letterIndex : letterIndex+wordL]
+		if b.letters[letterIndex] != word[0] {
+			break
+		}
+		if !runeEqual(cw, word) {
+			if count == 0 {
+				continue
+			} else {
+				break
 			}
 		}
+
+		count++
+
 	}
+	return count
 }
 
-func reverseRunes(rs []rune) []rune {
-	nr := []rune{}
-	for i := len(rs) - 1; i >= 0; i-- {
-		nr = append(nr, rs[i])
-	}
-	return nr
-}
+func (b *Builder) findFirst(word []rune, rankStart int, rankEnd int) int {
 
-func (b *Builder) ployWord(words map[string]*Word, right bool) {
-	for _, w := range words {
-		// poly 主词
-		main := ""
-		// poly 副词
-		neighbour := ""
-		if right {
-			main = string(w.Word[:len(w.Word)-1])
-			neighbour = string(w.Word[len(w.Word)-1:])
+	wordL := len(word)
+	alreadyEq := false
+	for {
+		if rankEnd == rankStart {
+			return rankEnd
+		}
+		mid := (rankEnd-rankStart)/2 + rankStart
+		letterIndex := b.rightRank[mid]
+		cw := b.letters[letterIndex : letterIndex+wordL]
+		if !runeEqual(cw, word) {
+			if !alreadyEq {
+				rankEnd = mid
+			} else {
+				rankStart = mid
+				break
+			}
 		} else {
-			main = string(w.Word[1:])
-			neighbour = string(w.Word[:1])
-		}
-
-		mainInfo := words[main]
-		if len(w.Word) == 2 {
-			mainInfo = b.singleWm[main]
-		}
-
-		neighbourInfo := b.singleWm[neighbour]
-		p := 0.0
-		if mainInfo == nil || neighbourInfo == nil {
-			p = 300
-		} else {
-			p = w.Freq / (mainInfo.Freq * neighbourInfo.Freq)
-		}
-		if w.Poly == 0 || w.Poly > p {
-			w.Poly = p
+			rankEnd = mid
+			alreadyEq = true
 		}
 
 	}
+	return -1
 }
 
-// 生成关键词排序
-func (b *Builder) genRank() {
-	b.right = rankWords(b.letters, b.maxLen)
-	b.left = rankWords(b.reverseLetters, b.maxLen)
+func (b *Builder) blockGenFlex(word, prefix, suffix []rune, count int) float64 {
+	// 因为只从右方向计算，右方向的字符 （suffix）就是有序的，左方向（prefix）就需要排序下
+	sort.Slice(prefix, func(i, j int) bool {
+		return prefix[i] < prefix[j]
+	})
+	leftFlex := oneDirectFlex(prefix, float64(count))
+	if leftFlex < minFlex {
+		return leftFlex
+	}
+	return math.Min(leftFlex, oneDirectFlex(suffix, float64(count)))
+
+}
+
+func oneDirectFlex(neighbourLetters []rune, count float64) float64 {
+	tr := rune(0)
+	tl := 0.0
+	flex := 0.0
+	for i, r := range neighbourLetters {
+		tl++
+		if tr == 0 {
+			tr = r
+			continue
+		}
+
+		if tr != r || i == len(neighbourLetters)-1 {
+			freq := tl / count
+			flex += -(freq * math.Log(freq))
+			tl = 1
+			tr = r
+		}
+	}
+	return flex
 }
 
 // rankWords 给切分的关键词排序
