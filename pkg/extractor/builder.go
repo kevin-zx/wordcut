@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/kevin-zx/wordcut/pkg/corpus/clear"
+	"github.com/kevin-zx/wordcut/pkg/runes"
 )
 
 // Builder 构建分词
@@ -335,63 +336,109 @@ func (b *Builder) ployOne(mainWord []rune, fix rune, wordCount int) float64 {
 	return (b.corpusFloatLen * float64(wordCount)) / (float64(fsw.count * mc))
 }
 func (b *Builder) getOneWordCount(word []rune, rankStart int, rankEnd int) int {
-	count := 0
-	wordL := len(word)
-
-	for {
-		if rankStart >= len(b.rightRank) {
-			break
-		}
-		letterIndex := b.rightRank[rankStart]
-		rankStart++
-		if letterIndex+wordL > len(b.letters) {
-			continue
-		}
-		cw := b.letters[letterIndex : letterIndex+wordL]
-		if b.letters[letterIndex] != word[0] {
-			break
-		}
-		if !runeEqual(cw, word) {
-			if count == 0 {
-				continue
-			} else {
-				break
-			}
-		}
-
-		count++
-
-	}
-	return count
+	rs, matchIndex, re := b.scaleRanger(word, rankStart, rankEnd)
+	s := b.findFirst(word, rs, matchIndex)
+	e := b.findEnd(word, re, matchIndex)
+	return e - s + 1
 }
 
-func (b *Builder) findFirst(word []rune, rankStart int, rankEnd int) int {
-
+func (b *Builder) scaleRanger(word []rune, rankStart int, rankEnd int) (rankStarts int, matchIndex int, rankEnds int) {
 	wordL := len(word)
-	alreadyEq := false
+	var mid int
+	rankStarts = rankStart
+	rankEnds = rankEnd
+
+	cr := 1
 	for {
-		if rankEnd == rankStart {
-			return rankEnd
+		if rankEnds-rankStarts < 1 {
+			matchIndex = -1
+			return
 		}
-		mid := (rankEnd-rankStart)/2 + rankStart
+		mid = (rankEnds-rankStarts)/2 + rankStarts
 		letterIndex := b.rightRank[mid]
 		cw := b.letters[letterIndex : letterIndex+wordL]
-		if !runeEqual(cw, word) {
-			if !alreadyEq {
-				rankEnd = mid
-			} else {
-				rankStart = mid
-				break
+		cr = runes.Compare(cw, word)
+		switch cr {
+		case -1:
+			rankStarts = mid
+			continue
+		case 1:
+			rankEnds = mid
+			continue
+		case 0:
+			matchIndex = mid
+			return
+		default:
+			matchIndex = -1
+			return
+		}
+	}
+}
+func (b *Builder) findFirst(word []rune, rankStart int, matchIndex int) int {
+	wordL := len(word)
+	cr := 1
+	mid := 0
+	for {
+		if matchIndex-rankStart < 100 {
+			for i := rankStart; i <= matchIndex; i++ {
+				letterIndex := b.rightRank[i]
+				if runeEqual(b.letters[letterIndex:letterIndex+len(word)], word) {
+					return i
+				}
 			}
-		} else {
-			rankEnd = mid
-			alreadyEq = true
+		}
+
+		mid = (matchIndex-rankStart)/2 + rankStart
+		letterIndex := b.rightRank[mid]
+		cw := b.letters[letterIndex : letterIndex+wordL]
+		cr = runes.Compare(cw, word)
+		switch cr {
+		case -1:
+			rankStart = mid
+			continue
+		// case 1:
+		//   return -1
+		case 0:
+			matchIndex = mid
+		default:
+			return -1
 		}
 
 	}
-	return -1
 }
 
+func (b *Builder) findEnd(word []rune, rankEnd int, matchIndex int) int {
+	wordL := len(word)
+	cr := 1
+	mid := 0
+	for {
+		if rankEnd-matchIndex < 100 {
+			for i := rankEnd; i >= matchIndex; i-- {
+				letterIndex := b.rightRank[i]
+				if runeEqual(b.letters[letterIndex:letterIndex+len(word)], word) {
+					return i
+				}
+			}
+		}
+
+		mid = (rankEnd-matchIndex)/2 + matchIndex
+		letterIndex := b.rightRank[mid]
+		cw := b.letters[letterIndex : letterIndex+wordL]
+		cr = runes.Compare(cw, word)
+		switch cr {
+		// case -1:
+		//   rankEnd = mid
+		//   continue
+		case 1:
+			rankEnd = mid
+		case 0:
+			matchIndex = mid
+		default:
+			return -1
+		}
+
+	}
+}
 func (b *Builder) blockGenFlex(word, prefix, suffix []rune, count int) float64 {
 	// 因为只从右方向计算，右方向的字符 （suffix）就是有序的，左方向（prefix）就需要排序下
 	sort.Slice(prefix, func(i, j int) bool {
@@ -432,17 +479,25 @@ func rankWords(words []rune, maxLen int) []int {
 	for i := range words {
 		wus[i] = i
 	}
+	var irunes []rune
+	var jrunes []rune
+	ri := 0
+	rj := 0
 	sort.Slice(wus, func(i, j int) bool {
-		for l := 0; l < maxLen; l++ {
-			if wus[i]+l >= len(words) || wus[j]+l >= len(words) {
-				break
-			}
-			if words[wus[i]+l] == words[wus[j]+l] {
-				continue
-			}
-			return words[wus[i]+l] < words[wus[j]+l]
+		ri = wus[i]
+		rj = wus[j]
+		if wus[ri]+maxLen > len(words) {
+			irunes = words[ri:]
+		} else {
+			irunes = words[ri : ri+maxLen]
 		}
-		return false
+
+		if rj+maxLen > len(words) {
+			jrunes = words[rj:]
+		} else {
+			jrunes = words[rj : rj+maxLen]
+		}
+		return runes.Compare(irunes, jrunes) == -1
 	})
 
 	return wus
