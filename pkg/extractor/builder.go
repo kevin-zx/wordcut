@@ -3,6 +3,7 @@ package extractor
 import (
 	"log"
 	"math"
+	"runtime"
 	"sort"
 	"sync"
 
@@ -155,8 +156,8 @@ func (b *Builder) calculateSideNew() {
 	blockLetter := rune(0)
 	rankStart := 0
 	rankEnd := 0
-	// c := runtime.NumCPU()
-	c := 1
+	c := runtime.NumCPU()
+	// c := 1
 	tasks := make(chan []int, c)
 	w := sync.WaitGroup{}
 	w.Add(c)
@@ -170,7 +171,7 @@ func (b *Builder) calculateSideNew() {
 	}
 	// 循环排序结果
 	for i, index := range b.rightRank {
-		if i%10000 == 0 {
+		if i%100000 == 0 {
 			log.Printf("cut words %d/%d = %.3f\n", i, len(b.rightRank), float64(i)/b.corpusFloatLen)
 		}
 
@@ -379,7 +380,7 @@ func (b *Builder) findFirst(word []rune, rankStart int, matchIndex int) int {
 	cr := 1
 	mid := 0
 	for {
-		if matchIndex-rankStart < 100 {
+		if matchIndex-rankStart < 50 {
 			for i := rankStart; i <= matchIndex; i++ {
 				letterIndex := b.rightRank[i]
 				if runeEqual(b.letters[letterIndex:letterIndex+len(word)], word) {
@@ -412,7 +413,7 @@ func (b *Builder) findEnd(word []rune, rankEnd int, matchIndex int) int {
 	cr := 1
 	mid := 0
 	for {
-		if rankEnd-matchIndex < 100 {
+		if rankEnd-matchIndex < 50 {
 			for i := rankEnd; i >= matchIndex; i-- {
 				letterIndex := b.rightRank[i]
 				if runeEqual(b.letters[letterIndex:letterIndex+len(word)], word) {
@@ -486,7 +487,7 @@ func rankWords(words []rune, maxLen int) []int {
 	sort.Slice(wus, func(i, j int) bool {
 		ri = wus[i]
 		rj = wus[j]
-		if wus[ri]+maxLen > len(words) {
+		if ri+maxLen > len(words) {
 			irunes = words[ri:]
 		} else {
 			irunes = words[ri : ri+maxLen]

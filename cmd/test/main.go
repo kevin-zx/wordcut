@@ -23,10 +23,10 @@ func main() {
 }
 
 func run() {
-	// data, err := ioutil.ReadFile("../../西游记.txt")
-	// data, err := ioutil.ReadFile("./西游记.txt")
-	// data, err := ioutil.ReadFile("./content.data")
-	data, err := ioutil.ReadFile("../../content.data")
+	// data, err := ioutil.ReadFile("../../data/西游记.txt")
+	// data, err := ioutil.ReadFile("./data/西游记.txt")
+	// data, err := ioutil.ReadFile("./data/content.data")
+	data, err := ioutil.ReadFile("../../data/content.data")
 	if err != nil {
 		panic(err)
 	}

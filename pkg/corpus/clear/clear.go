@@ -13,6 +13,7 @@ func PureCorpusWithLettersAndDigitals(content string) []rune {
 	for strings.Contains(content, "  ") {
 		content = strings.ReplaceAll(content, "  ", " ")
 	}
+	content = strings.ToLower(content)
 	var rs []rune
 	tasks := make(chan string, core*2)
 	lock := sync.Mutex{}
