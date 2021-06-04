@@ -149,9 +149,6 @@ func (b *Builder) singleWordN() {
 func (b *Builder) calculateSideNew() {
 	// 单词的第一个字符
 	currLetter := rune(0)
-	// // 每个不同字符积累的
-	// var words map[string]*Word
-	// isLetter := false
 
 	blockLetter := rune(0)
 	rankStart := 0
@@ -213,6 +210,9 @@ func (b *Builder) calculateBlock(start, end int) {
 			if index+l > len(b.letters) {
 				continue
 			}
+			if needFilterPrefix(b.letters[index]) {
+				continue
+			}
 			cs := b.letters[index : index+l]
 			if !isfirstLetter {
 				for i, c := range cs {
@@ -228,8 +228,6 @@ func (b *Builder) calculateBlock(start, end int) {
 				if cs[len(cs)-1] == ' ' {
 					continue
 				}
-				// fmt.Println(string(cs))
-
 			}
 
 			if word == nil {
@@ -279,9 +277,22 @@ func (b *Builder) calculateBlock(start, end int) {
 			}
 
 			count++
-			// words = append(words, w)
 		}
 	}
+}
+
+var filterRunes []rune = []rune{
+	'的',
+	'了',
+}
+
+func needFilterPrefix(r rune) bool {
+	for _, pr := range filterRunes {
+		if r == pr {
+			return true
+		}
+	}
+	return false
 }
 
 func runeEqual(r1, r2 []rune) bool {
