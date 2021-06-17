@@ -3,7 +3,6 @@ package extractor
 import (
 	"log"
 	"math"
-	"runtime"
 	"sort"
 	"sync"
 
@@ -16,6 +15,7 @@ type Builder struct {
 	rightRank      []int
 	letters        letters
 	maxLen         int
+	core           int
 	wm             []*Word
 	singleWmn      map[rune]*singWm
 	corpusFloatLen float64
@@ -94,6 +94,21 @@ func NewBuilder(corpus []rune, maxLen int) *Builder {
 	return &b
 }
 
+func NewParallelBuilder(corpus []rune, maxLen int, core int) *Builder {
+	if core < 1 {
+		core = 1
+	}
+	b := Builder{
+		letters:        corpus,
+		maxLen:         maxLen,
+		core:           core,
+		corpusFloatLen: float64(len(corpus)),
+	}
+	lock = new(sync.Mutex)
+	b.wm = []*Word{}
+	return &b
+}
+
 // 最小词频次
 const minCount = 10
 const minPoly = 5.0
@@ -153,12 +168,10 @@ func (b *Builder) calculateSideNew() {
 	blockLetter := rune(0)
 	rankStart := 0
 	rankEnd := 0
-	c := runtime.NumCPU()
-	// c := 1
-	tasks := make(chan []int, c)
+	tasks := make(chan []int, b.core)
 	w := sync.WaitGroup{}
-	w.Add(c)
-	for i := 0; i < c; i++ {
+	w.Add(b.core)
+	for i := 0; i < b.core; i++ {
 		go func() {
 			for t := range tasks {
 				b.calculateBlock(t[0], t[1])
