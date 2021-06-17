@@ -126,7 +126,11 @@ func (b *Builder) Extract() []*Word {
 	log.Printf("end gen right rank\n")
 
 	b.calculateSideNew()
-	return b.score()
+	words := b.score()
+	b.wm = nil
+	b.letters = nil
+	b.singleWmn = nil
+	return words
 }
 
 func (b *Builder) score() []*Word {
