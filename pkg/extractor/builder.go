@@ -357,15 +357,15 @@ func (b *Builder) ployOne(mainWord []rune, fix rune, wordCount int) float64 {
 	fsw := b.singleWmn[fix]
 	msw := b.singleWmn[mainWord[0]]
 	if msw == nil {
-		log.Printf("msw is nil %s\n", string(mainWord))
+		log.Printf("msw is nil %s %s \n", string(mainWord), string(fix))
 		return 0
 	}
 	if fsw == nil {
-		log.Printf("fsw is nil %s\n", string(mainWord))
+		log.Printf("fsw is nil %s %s \n", string(mainWord), string(fix))
 		return 0
 	}
 	if mainWord == nil {
-		log.Printf("mainWord is nil %s\n", string(mainWord))
+		log.Printf("mainWord is nil %s %s \n", string(mainWord), string(fix))
 		return 0
 	}
 	mc := 0
