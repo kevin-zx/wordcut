@@ -356,6 +356,18 @@ func (b *Builder) blockPloyWord(word []rune, wordCount int) float64 {
 func (b *Builder) ployOne(mainWord []rune, fix rune, wordCount int) float64 {
 	fsw := b.singleWmn[fix]
 	msw := b.singleWmn[mainWord[0]]
+	if msw == nil {
+		log.Printf("msw is nil %s\n", string(mainWord))
+		return 0
+	}
+	if fsw == nil {
+		log.Printf("fsw is nil %s\n", string(mainWord))
+		return 0
+	}
+	if mainWord == nil {
+		log.Printf("mainWord is nil %s\n", string(mainWord))
+		return 0
+	}
 	mc := 0
 	if len(mainWord) == 1 {
 		mc = msw.count
