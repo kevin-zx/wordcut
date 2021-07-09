@@ -154,7 +154,7 @@ func (b *Builder) singleWordN() {
 		if letter == 0 {
 			letter = wr
 		}
-		if letter != wr {
+		if letter != wr || i == len(b.rightRank)-1 {
 			b.singleWmn[letter] = &singWm{start: start, end: i - 1, count: i - start}
 			start = i
 			letter = wr
