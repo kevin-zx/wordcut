@@ -88,6 +88,7 @@ func NewBuilder(corpus []rune, maxLen int) *Builder {
 		letters:        corpus,
 		maxLen:         maxLen,
 		corpusFloatLen: float64(len(corpus)),
+		core:           1,
 	}
 	lock = new(sync.Mutex)
 	b.wm = []*Word{}
